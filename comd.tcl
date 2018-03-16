@@ -23,7 +23,7 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-package provide comd 4.1
+package provide comd 5.0
 
 package require solvate
 package require autoionize
@@ -596,7 +596,7 @@ A unique and descriptive prefix choice may allow running multiple simulations in
 proc ::comd::Prepare_system {} {
 
   # WHAT IS NEW?
-  # 4.1 - An additional running mode where pseudoatoms are used and 
+  # 5.0 - An additional running mode where pseudoatoms are used and 
   #       all-atom steps are skipped
   # 4.0 - The ability to run from the command line with input variables
   # 3.0 - Improved to allow exploration from a single structure 
@@ -669,7 +669,17 @@ proc ::comd::Prepare_system {} {
   puts $log_file "Info: Logging started for setup of $::comd::output_prefix."
   puts $log_file "Solvation: Box padding $::comd::solvent_padding_x A in x, $::comd::solvent_padding_y A in y, $::comd::solvent_padding_z A in z."
 
+  # Make minimization directories regardless of whether we are using pseudoatoms.
+  # If we are then we still need to mimic minimization by having files in the right places.
+  set tcl_file_name [file join "$::comd::outputdir" "$::comd::output_prefix.tcl"]
+  set tcl_file [open $tcl_file_name w]
+  puts $tcl_file "file mkdir \"${::comd::output_prefix}_walker1_min\""
+  if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
+    puts $tcl_file "file mkdir \"${::comd::output_prefix}_walker2_min\""
+  }
+
   if {$::comd::use_pseudoatoms == 0} {
+    puts "Using an all-atom PDB not pseudoatoms"
     ####### SOLVATION AND IONIZATION OF WALKER 1 PROTEIN STRUCTURE #######
     resetpsf
     mol delete all
@@ -802,8 +812,6 @@ proc ::comd::Prepare_system {} {
       lappend ::comd::para_file "$COMD_PATH/par_all36m_prot.prm" 
       lappend ::comd::para_file "$COMD_PATH/toppar_water_ions.str"
     }
-    set tcl_file_name [file join "$::comd::outputdir" "$::comd::output_prefix.tcl"]
-    set tcl_file [open $tcl_file_name w] 
     puts $tcl_file "#This tcl file will run full collective molecular dynamics simulation with given parameters."
     puts $tcl_file "cd $::comd::outputdir"
     puts $tcl_file "set sh_filename \"${::comd::output_prefix}_min0.sh\""
@@ -843,7 +851,6 @@ proc ::comd::Prepare_system {} {
     puts $tcl_file "puts \$sh_file \"NAMD=\\\"\$namd2path \+idlepoll \\\"\""
 
     # Walker 1 minimization
-    puts $tcl_file "file mkdir \"${::comd::output_prefix}_walker1_min\""
     puts $tcl_file "set namd_file \[open \[file join \"${::comd::output_prefix}_walker1_min\" \"min.conf\"\] w\]"
     puts $tcl_file "puts \$namd_file \"coordinates     ..\/walker1_initial.pdb\""
     puts $tcl_file "puts \$namd_file \"structure       ..\/walker1_initial.psf\""
@@ -891,7 +898,6 @@ proc ::comd::Prepare_system {} {
 
     if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
       # Walker 2 minimization
-      puts $tcl_file "file mkdir \"${::comd::output_prefix}_walker2_min\""
       puts $tcl_file "set namd_file \[open \[file join \"${::comd::output_prefix}_walker2_min\" \"min.conf\"\] w\]"
       puts $tcl_file "puts \$namd_file \"coordinates     ..\/walker2_initial.pdb\""
       puts $tcl_file "puts \$namd_file \"structure       ..\/walker2_initial.psf\""
@@ -956,6 +962,7 @@ proc ::comd::Prepare_system {} {
       puts $tcl_file "file mkdir ${::comd::output_prefix}_walker2_pro"
     }
   } else {
+    puts "Using pseudoatoms rather than an all-atom PDB"
     mol delete all
     mol new $::comd::walker1_pdb
     set sel [atomselect top "all"]
@@ -1466,6 +1473,7 @@ proc ::comd::Prepare_system {} {
       $sel writepdb walker2_initial.pdb
       puts $tcl_file "set status \[catch \{exec cp cycle_\$\{cycle\}_starting_walker2_walker2_target_final_structure.dcd \
       ${::comd::output_prefix}_walker1_min\/walker1_minimized\$\{cycle\}.dcd\} output\]"
+    }
   }
 
   # Add the resulting conformations to DCD files with the other ones from previous cycles
@@ -1557,7 +1565,6 @@ if { $argc < 3 } {
   puts "Please provide the same filename twice to calculate a random walk "
   puts "rather than a transition."
 } else {
-
   if {[catch {
     set num_args 26
 
@@ -1593,12 +1600,12 @@ if { $argc < 3 } {
       }
       if {$index eq 10} {set ::comd::anm_cutoff [lindex $argv $index]}
       if {$index eq 11} {set ::comd::max_steps [lindex $argv $index]}
-      if {$index eq 12} {set ::comd::num_cores [lindex $argv $index]}
-      if {$index eq 13} {
+      if {$index eq 12} {set ::comd::use_pseudoatoms [lindex $argv $index]}
+      if {$index eq 13} {set ::comd::num_cores [lindex $argv $index]}
+      if {$index eq 14} {
         set ::comd::gpus_selected [lindex $argv $index]
         set ::comd::gpus_present 1
       }
-      if {$index eq 14} {set ::comd::use_pseudoatoms [lindex $argv $index]}
       if {$index eq 15} {set ::comd::accept_para [lindex $argv $index]}
       if {$index eq 16} {set ::comd::walker1_chid [lindex $argv $index]}
       if {$index eq 17} {set ::comd::walker2_chid [lindex $argv $index]}
@@ -1622,7 +1629,10 @@ if { $argc < 3 } {
       if {$index eq  9} {set ::comd::tmd_len 10}
       if {$index eq 10} {set ::comd::anm_cutoff ""}
       if {$index eq 11} {set ::comd::max_steps [lindex $argv $index]}
-      if {$index eq 14} {set ::comd::use_pseudoatoms 0}
+      if {$index eq 12} {set ::comd::use_pseudoatoms 0}
+      if {$index eq 13} {
+        set ::comd::num_cores [expr {[eval exec "cat /proc/cpuinfo | grep processor | tail -n 1 | awk \" \{ print \\\$3 \} \""] + 1}]
+      }
       if {$index eq 18} {set ::comd::solvent_padding_x 10}
       if {$index eq 19} {set ::comd::solvent_padding_y 10}
       if {$index eq 20} {set ::comd::solvent_padding_z 10}
@@ -1630,7 +1640,7 @@ if { $argc < 3 } {
       if {$index eq 22} {set ::comd::temperature 298}
       if {$index eq 23} {set ::comd::para_file [list]}
       if {$index eq 24} {set ::comd::spring_k 20000}
-      if {$index eq 13} {
+      if {$index eq 14} {
         if {[catch {
           set output [eval exec "nvidia-smi"]
           set records [split $output "\n"]
@@ -1687,8 +1697,6 @@ if { $argc < 3 } {
           set ::comd::gpus_present 1
         }
       }
-      if {$index eq 12} {
-        set ::comd::num_cores [expr {[eval exec "cat /proc/cpuinfo | grep processor | tail -n 1 | awk \" \{ print \\\$3 \} \""] + 1}]}
       if {$index eq 25} {set ::comd::run_now 1}
       if {$index eq 26} {set ::comd::from_commandline 1}
     }
