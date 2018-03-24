@@ -36,7 +36,6 @@ package require exectool
 set COMD_PATH $env(COMD_PATH)
 set PACKAGE_PATH "$COMD_PATH"
 set PACKAGEPATH "$COMD_PATH"
-set env(PROBEDIR) "$COMD_PATH"
 
 variable platform $tcl_platform(platform)
 switch $platform {
@@ -79,6 +78,7 @@ namespace eval ::comd:: {
   variable dev_mag 
   variable accept_para
   variable max_steps
+  variable step_cutoff
   # TMD options
   variable spring_k 
   variable tmd_len 
@@ -86,12 +86,17 @@ namespace eval ::comd:: {
   variable comd_cycle 
   variable num_cores
   variable gpus_selected
+  variable gpus_selection1
+  variable gpus_selection2
+  variable gpus_present
   variable python_path ""
+  variable NAMD_PATH ""
   # output options
   variable outputdir 
   variable output_prefix
-  variable from_commandline
+  variable from_commandline 0
   variable run_now
+  variable start_dir
   
   # Logvew window counter
   variable logcount 0
@@ -99,15 +104,24 @@ namespace eval ::comd:: {
   variable titles [list "Prepare System"]
   variable interfaces [list "prepare"]
   variable which_mode [lindex $titles 0]
-
-
 }
 
+proc wsplit {string sep} {
+    set first [string first $sep $string]
+    if {$first == -1} {
+        return [list $string]
+    } else {
+        set l [string length $sep]
+        set left [string range $string 0 [expr {$first-1}]]
+        set right [string range $string [expr {$first+$l}] end]
+        return [concat [list $left] [wsplit $right $sep]]
+    }
+}
 
-proc comd::Logview {logfilename} {
+proc comd::Logview {log_file_name} {
   variable logcount
   variable lognames
-  set logindex [lsearch $lognames $logfilename]
+  set logindex [lsearch $lognames $log_file_name]
   set log .somenonsense
   if {$logindex > -1} {
     set windowname "log$logindex"
@@ -118,10 +132,10 @@ proc comd::Logview {logfilename} {
       lset lognames $logindex "somenonsense"
     }
     set logindex $logcount
-    lappend lognames $logfilename
+    lappend lognames $log_file_name
     set windowname "log$logindex"
     set log [toplevel ".$windowname"]
-    wm title $log "Logfile [lindex [file split $logfilename] end] ($logfilename)"
+    wm title $log "Logfile [lindex [file split $log_file_name] end] ($log_file_name)"
     wm resizable $log 1 1
     incr logcount
 
@@ -146,7 +160,7 @@ proc comd::Logview {logfilename} {
   #    }
   #}
   $log.text delete 1.0 end
-  set logfile [open $logfilename "r"]
+  set logfile [open $log_file_name "r"]
   set line ""
   while {[gets $logfile line] != -1} {
     $log.text insert end "$line\n"
@@ -173,27 +187,6 @@ proc ::comd::comdgui {} {
   set w [toplevel .comdgui]
   wm title $w "COllective Molecular Dynamics v$::comd::version"
   wm resizable $w 0 0
-
-#   set wif [frame $w.interface_frame]
-#   button $wif.help -text "?" -padx 0 -pady 3 -command {
-#       tk_messageBox -type ok -title "HELP" \
-#       -message "Use option menu to change the active interface. There are\
-# two interfaces to facilitate the COllective Molecular Dynamics.\n\n\
-# [lindex $::druggability::titles 0]\n\
-# Prepare protein in a water-probe mixture box or in a water-only box using\
-# this interface. Also, by default generic NAMD input files are outputed.\
-# Protein PSF and PDB files that also \
-# contains cofactors/ions etc. are required from the user.\n\n\
-# "}
-#   variable titles
-#   tk_optionMenu $wif.list ::comd::which_mode "System Setup"
-#   $wif.list.menu delete 0
-#   $wif.list.menu add radiobutton -label [lindex $titles 0] \
-#     -variable ::comd::which_mode \
-#     -command {::comd::Switch_mode "prepare"}
-#   pack $wif.help -side left
-#   pack $wif.list -side left -expand 1 -fill x
-#   pack $wif -pady 2 -expand 1 -fill x
 
   # Set main frame
   set mf [frame $w.main_frame]
@@ -410,14 +403,25 @@ based on topology parameters provided. Suggested file extension is .top but othe
 
   set mfamc [labelframe $mfa.anmmc_options -text "ANM-MC-Metropolis options:" -bd 2]
   
-  grid [button $mfamc.anmcut_help -text "?" -width 1 -padx 0 -pady 0 -command {
-      tk_messageBox -type ok -title "HELP" \
-        -message "In ANM calculations, the cutoff parameter is the maximum distance that two residues are in contact. The units are A. "}] \
+  #grid [button $mfamc.anmcut_help -text "?" -width 1 -padx 0 -pady 0 -command {
+  #    tk_messageBox -type ok -title "HELP" \
+  #      -message "In ANM calculations, the cutoff parameter is the maximum distance that two residues are in contact. The units are A. "}] \
+  #  -row 0 -column 0 -sticky w
+  #grid [label $mfamc.anmc_label -text "ANM cutoff (A):              " -width 21] \
+  #  -row 0 -column 1 -sticky w
+  #grid [entry $mfamc.anmc_field -width 17 \
+  #  -textvariable ::comd::anm_cutoff] \
+  #  -row 0 -column 2 -columnspan 3 -sticky w
+
+  grid [button $mfamc.step_cutoffut_help -text "?" -padx 0 -pady 0 -command {
+    tk_messageBox -type ok -title "HELP" \
+      -message "To keep structure intact and to avoid having unrealistic \
+        and very different structures in ANM-MC step, an rmsd threshold is used. Suggested value is 4 A."}] \
     -row 0 -column 0 -sticky w
-  grid [label $mfamc.anmc_label -text "ANM cutoff (A):              " -width 21] \
+  grid [label $mfamc.step_cutoff_label -text "Step cutoff (A): "] \
     -row 0 -column 1 -sticky w
-  grid [entry $mfamc.anmc_field -width 17 \
-    -textvariable ::comd::anm_cutoff] \
+  grid [entry $mfamc.step_cutoff_field -width 17 \
+    -textvariable ::comd::step_cutoff] \
     -row 0 -column 2 -columnspan 3 -sticky w
 
   grid [label $mfamc.separatpr1_label -width 6] \
@@ -455,30 +459,6 @@ based on topology parameters provided. Suggested file extension is .top but othe
   grid [entry $mfamc.max_steps_field -width 17 \
       -textvariable ::comd::max_steps] \
     -row 1 -column 8 -columnspan 3 -sticky w
-
-  # grid [button $mfamc.stepcut_help -text "?" -padx 0 -pady 0 -command {
-  #     tk_messageBox -type ok -title "HELP" \
-  #       -message "To keep structure intact and to avoid having unrealistic \
-  #       and very different structures in ANM-MC step, an rmsd threshold is used. Suggested value is 4 A."}] \
-  #   -row 1 -column 0 -sticky w
-  # grid [label $mfamc.stepc_label -text "Step cutoff (A): "] \
-  #   -row 1 -column 1 -sticky w
-  # grid [entry $mfamc.stepc_field -width 6 -textvariable ::comd::step_cutoff] \
-  #   -row 1 -column 2 -sticky w
-
-  #   grid [label $mfamc.separatpr_label -text "      "] \
-  #   -row 1 -column 3 -sticky w
-
-  # grid [button $mfamc.num_cyc_help -text "?" -padx 0 -pady 0 -command {
-  #     tk_messageBox -type ok -title "HELP" \
-  #       -message "The number of disturbances on the structure based on ANM modes. \
-  #       The number of disturbances should be selected based on structure and for a structure with 200 residues suggested number is in order of thousands."}] \
-  #   -row 1 -column 4 -sticky w
-  # grid [label $mfamc.num_cyc_label -text "No of disturbances: "] \
-  #   -row 1 -column 5 -sticky w
-  # grid [entry $mfamc.num_cyc_field -width 6 \
-  #     -textvariable ::comd::anm_cycle] \
-  #   -row 1 -column 6 -sticky w  
 
   pack $mfamc -side top -ipadx 0 -ipady 5 -fill x -expand 1
 
@@ -530,7 +510,7 @@ the spring constant term shows the force applied to a given structure to reach t
     tk_messageBox -type ok -title "HELP" \
       -message "If this is checked the simulations will run as soon as the system is prepared"}] \
     -row 0 -column 6 -sticky w
-  grid [label $mfaso.run_now_label -text "Add counter ions:              " -width 21] \
+  grid [label $mfaso.run_now_label -text "Run now:                       " -width 21] \
     -row 0 -column 7 -sticky w
   grid [label $mfaso.separatpr2_label -width 13] \
     -row 1 -column 8 -columnspan 2 -sticky w
@@ -636,8 +616,13 @@ proc ::comd::Prepare_system {} {
   if {$::comd::outputdir != ""} {
       if {![file isdirectory $::comd::outputdir]} {
         if {[catch {file mkdir $::comd::outputdir}]} {
-          tk_messageBox -type ok -title "ERROR" \
+          if {[info exists ::comd::from_commandline]} {
+            error "Could not make output folder: $::comd::outputdir"
+          } else {
+            tk_messageBox -type ok -title "ERROR" \
             -message "Could not make output folder: $::comd::outputdir"
+          }
+          
           return
 
         }
@@ -671,7 +656,7 @@ proc ::comd::Prepare_system {} {
   global env
   global COMD_PATH
 
-  set log_file [open [file join "$::comd::outputdir" "$::comd::output_prefix.log"] a]
+  set log_file [open [file join "$::comd::outputdir" "$::comd::output_prefix.log"] w]
   puts $log_file "---==## [clock format [clock seconds]] #==---"
   puts $log_file "Version: $::comd::version"
   puts $log_file "Info: Logging started for setup of $::comd::output_prefix."
@@ -799,8 +784,10 @@ proc ::comd::Prepare_system {} {
   }
   
   ####### INITIAL MINIMIZATION OF STARTING PROTEIN STRUCTURES #######
- 
-  puts $log_file "Simulation: NAMD configuration files for minimization written in ${::comd::output_prefix}_walker1_min and ${::comd::output_prefix}_walker2_min."
+  puts $log_file "Simulation: NAMD configuration files for minimization written in ${::comd::output_prefix}_walker1_min"
+  if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
+    puts $log_file "and ${::comd::output_prefix}_walker2_min."
+  }
   close $log_file
 
   if {$::comd::para_file == [list]} {
@@ -811,26 +798,42 @@ proc ::comd::Prepare_system {} {
   set tcl_file_name [file join "$::comd::outputdir" "$::comd::output_prefix.tcl"]
   set tcl_file [open $tcl_file_name w] 
   puts $tcl_file "#This tcl file will run full collective molecular dynamics simulation with given parameters."
+  puts $tcl_file "cd $::comd::outputdir"
+  puts $tcl_file "set sh_filename \"${::comd::output_prefix}_min0.sh\""
+  puts $tcl_file "set sh_file \[open \$sh_filename w\]"
 
-  puts $tcl_file "set sh_file \[open \"$::comd::output_prefix.sh\" w\]"
-  puts $tcl_file "set sh_filename \"${::comd::output_prefix}.sh\""
   puts $tcl_file "package require exectool"
-  puts $tcl_file "set namd2path \[::ExecTool::find \"namd2\"\]"
+  if {$::comd::NAMD_PATH == ""} {
+    puts $tcl_file "set namd2path \[::ExecTool::find \"namd2\"\]"
+  } else {
+    puts $tcl_file "set namd2path ${::comd::NAMD_PATH}"
+  }
+
   if {$::comd::python_path == ""} {
-  	puts $tcl_file "set python_path \[::ExecTool::find \"python\"\]"	
+    puts $tcl_file "set python_path \[::ExecTool::find \"python\"\]"	
   } else {
-  	puts $tcl_file "set python_path $python_path\/python" 
+    puts $tcl_file "set python_path $::comd::python_path\/python" 
   }
+
+
   puts $tcl_file "puts \$sh_file \"\\\#\\\!\\\/bin\\\/bash\""
-  if {[info exists ::comd::gpu_selected] && [info exists ::comd::num_cores]} { 
-    puts $tcl_file "puts \$sh_file \"NAMD=\\\"\$namd2path \+p[expr $::comd::num_cores/2] \+devices $::comd::gpus_selected\\\"\"" 
-  } elseif {[info exists ::comd::gpu_selected]} {
-    puts $tcl_file "puts \$sh_file \"NAMD=\\\"\$namd2path \+devices $::comd::gpus_selected\\\"\""
-  } elseif {[info exists ::comd:num_cores]} {
-    puts $tcl_file "puts \$sh_file \"NAMD=\\\"\$namd2path \+p[expr $::comd::num_cores/2] \\\"\""
-  } else {
-    puts $tcl_file "puts \$sh_file \"NAMD=\\\"\$namd2path \\\"\""
+
+  if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
+    set ::comd::num_cores [expr {$::comd::num_cores / 2}]
   }
+
+  if {$::comd::gpus_present} {
+    set processes_per_run [expr {[llength [wsplit $::comd::gpus_selection1 ","]] + 1}]
+
+    if {[info exists ::comd::num_cores]} {
+      set remainder [expr {$::comd::num_cores % $processes_per_run}]
+      set processes_per_run [expr {$::comd::num_cores - $remainder - $processes_per_run}]
+    }
+  } else {
+    set processes_per_run [expr {$::comd::num_cores - 1}] 
+  }
+
+  puts $tcl_file "puts \$sh_file \"NAMD=\\\"\$namd2path \+idlepoll \\\"\""
 
   # Walker 1 minimization
   puts $tcl_file "file mkdir \"${::comd::output_prefix}_walker1_min\""
@@ -867,16 +870,16 @@ proc ::comd::Prepare_system {} {
   puts $tcl_file "puts \$namd_file \"langevinTemp \\\$temperature\""
   puts $tcl_file "puts \$namd_file \"langevinHydrogen on\""
   puts $tcl_file "puts \$namd_file \"outputname \\\$outputname\""
-  puts $tcl_file "puts \$namd_file \"outputEnergies [expr $::comd::min_length*100]\""
-  puts $tcl_file "puts \$namd_file \"outputPressure [expr $::comd::min_length*100]\""
-  puts $tcl_file "puts \$namd_file \"restartfreq [expr $::comd::min_length*100]\""
-  puts $tcl_file "puts \$namd_file \"dcdfreq [expr $::comd::min_length*100]\""
-  puts $tcl_file "puts \$namd_file \"xstfreq [expr $::comd::min_length*100]\""
-  puts $tcl_file "puts \$namd_file \"minimize [expr $::comd::min_length*500]\""
+  puts $tcl_file "puts \$namd_file \"outputEnergies $::comd::min_length\""
+  puts $tcl_file "puts \$namd_file \"outputPressure $::comd::min_length\""
+  puts $tcl_file "puts \$namd_file \"restartfreq $::comd::min_length\""
+  puts $tcl_file "puts \$namd_file \"dcdfreq [expr $::comd::min_length*5]\""
+  puts $tcl_file "puts \$namd_file \"xstfreq [expr $::comd::min_length*5]\""
+  puts $tcl_file "puts \$namd_file \"minimize [expr $::comd::min_length*5]\""
   puts $tcl_file "puts \$namd_file \"reinitvels \\\$temperature\""
   puts $tcl_file "close \$namd_file"
   puts $tcl_file "puts \$sh_file \"cd ${::comd::output_prefix}_walker1_min\""
-  puts $tcl_file "puts \$sh_file \"\\\$NAMD min.conf > min0.log \&\""
+  puts $tcl_file "puts \$sh_file \"\\\$NAMD \+devices $::comd::gpus_selection1 \+ppn $processes_per_run min.conf > min0.log \&\""
   puts $tcl_file "puts \$sh_file \"cd ..\"" 
 
   if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
@@ -915,37 +918,73 @@ proc ::comd::Prepare_system {} {
     puts $tcl_file "puts \$namd_file \"langevinTemp \\\$temperature\""
     puts $tcl_file "puts \$namd_file \"langevinHydrogen on\""
     puts $tcl_file "puts \$namd_file \"outputname \\\$outputname\""
-    puts $tcl_file "puts \$namd_file \"outputEnergies [expr $::comd::min_length*100]\""
-    puts $tcl_file "puts \$namd_file \"outputPressure [expr $::comd::min_length*100]\""
-    puts $tcl_file "puts \$namd_file \"restartfreq [expr $::comd::min_length*100]\""
-    puts $tcl_file "puts \$namd_file \"dcdfreq [expr $::comd::min_length*100]\""
-    puts $tcl_file "puts \$namd_file \"xstfreq [expr $::comd::min_length*100]\""
-    puts $tcl_file "puts \$namd_file \"minimize [expr $::comd::min_length*500]\""
+    puts $tcl_file "puts \$namd_file \"outputEnergies $::comd::min_length\""
+    puts $tcl_file "puts \$namd_file \"outputPressure $::comd::min_length\""
+    puts $tcl_file "puts \$namd_file \"restartfreq $::comd::min_length\""
+    puts $tcl_file "puts \$namd_file \"dcdfreq [expr $::comd::min_length*5]\""
+    puts $tcl_file "puts \$namd_file \"xstfreq [expr $::comd::min_length*5]\""
+    puts $tcl_file "puts \$namd_file \"minimize [expr $::comd::min_length*5]\""
     puts $tcl_file "puts \$namd_file \"reinitvels \\\$temperature\""
     puts $tcl_file "close \$namd_file"
     puts $tcl_file "puts \$sh_file \"cd ${::comd::output_prefix}_walker2_min\""
-    puts $tcl_file "puts \$sh_file \"\\\$NAMD min.conf > min0.log \&\""
+    puts $tcl_file "puts \$sh_file \"\\\$NAMD \+devices $::comd::gpus_selection2 \+ppn $processes_per_run min.conf > min0.log \&\""
     puts $tcl_file "puts \$sh_file \"cd ..\"" 
   }
 
   puts $tcl_file "puts \$sh_file \"wait\""
   puts $tcl_file "close \$sh_file"
+  puts $tcl_file "puts \"Now running minimization 0\""
   puts $tcl_file "set status \[catch \{exec bash \$sh_filename\} output\]"
-  puts $tcl_file "set status \[catch \{exec cp ${::comd::output_prefix}_walker1_min\/walker1_minimized0.dcd initr.dcd\} output\]" 
+
+  puts $tcl_file "if {\$status} {"
+  puts $tcl_file "set err_file \[open \"$::comd::output_prefix.log\" a\]"
+  puts $tcl_file "puts \$err_file \"ERROR: \$output\""
+  puts $tcl_file "exit"
+  puts $tcl_file "}"
+
+  puts $tcl_file "puts \"Finished minimization 0\""
+
+  puts $tcl_file "set status \[catch \{exec cp ${::comd::output_prefix}_walker1_min\/walker1_minimized0.dcd initr.dcd\} output\]"
+  puts $tcl_file "if {\$status} {"
+  puts $tcl_file "set err_file \[open \"$::comd::output_prefix.log\" a\]"
+  puts $tcl_file "puts \$err_file \"ERROR: \$output\""
+  puts $tcl_file "exit"
+  puts $tcl_file "}"
   
   if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
     puts $tcl_file "set status \[catch \{exec cp ${::comd::output_prefix}_walker2_min\/walker2_minimized0.dcd fintr.dcd\} output\]" 
+    puts $tcl_file "if {\$status} {"
+    puts $tcl_file "set err_file \[open \"$::comd::output_prefix.log\" a\]"
+    puts $tcl_file "puts \$err_file \"ERROR: \$output\""
+    puts $tcl_file "exit"
+    puts $tcl_file "}"
+  }
+
+  puts $tcl_file "puts \"Finished copying step after minimization 0\""
+
+  # Check if any files are missing and if so raise an error
+  puts $tcl_file "if {\[catch {open ${::comd::output_prefix}_walker1_min/walker1_minimized0.coor r} fid\]} {"
+  puts $tcl_file "set err_file \[open \"$::comd::output_prefix.log\" a\]"
+  puts $tcl_file "puts \$err_file \"ERROR: The original minimization of structure 1 failed. See ${::comd::output_prefix}_walker1_min/min0.log for details.\""
+  puts $tcl_file "exit"
+  puts $tcl_file "}"
+  if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
+    puts $tcl_file "if {\[catch {open ${::comd::output_prefix}_walker2_min/walker2_minimized0.coor r} fid\]} {"
+    puts $tcl_file "set err_file \[open \"$::comd::output_prefix.log\" a\]"
+    puts $tcl_file "puts \$err_file \"ERROR: The original minimization of structure 2 failed. See ${::comd::output_prefix}_walker2_min/min0.log for details.\""
+    puts $tcl_file "exit"
+    puts $tcl_file "}"
   }
 
   if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
-    puts $tcl_file "package require psfgen"
+    #puts $tcl_file "package require psfgen"
     puts $tcl_file "mol delete all" 
     puts $tcl_file "mol load psf walker1_ionized.psf"
-    puts $tcl_file "mol addfile ${::comd::output_prefix}_walker1_min/walker1_minimized.coor" 
+    puts $tcl_file "mol addfile ${::comd::output_prefix}_walker1_min/walker1_minimized0.coor" 
     puts $tcl_file "set sel1 \[atomselect top \"name CA\"\]" 
     puts $tcl_file "set sel1a \[atomselect top all\]"
     puts $tcl_file "mol load psf walker2_ionized.psf"
-    puts $tcl_file "mol addfile ${::comd::output_prefix}_walker2_min/walker2_minimized.coor"  
+    puts $tcl_file "mol addfile ${::comd::output_prefix}_walker2_min/walker2_minimized0.coor"  
     puts $tcl_file "set sel2 \[atomselect top \"name CA\"\]" 
     puts $tcl_file "set sel2a \[atomselect top all\]"
     puts $tcl_file "set trans_mat \[measure fit \$sel2 \$sel1\]"
@@ -956,32 +995,30 @@ proc ::comd::Prepare_system {} {
     puts $tcl_file "file mkdir ${::comd::output_prefix}_walker2_pro"
   }
 
-  puts $tcl_file "file mkdir ${::comd::output_prefix}_walker1_pro" 
-
+  puts $tcl_file "file mkdir ${::comd::output_prefix}_walker1_pro"
 
   #loop start
   puts $tcl_file "for {set cycle 1} {\$cycle < $::comd::comd_cycle} {incr cycle} {"
   puts $tcl_file "mol delete all"
 
-
   # Check if any files are missing and if so retry the previous cycle
-  puts $tcl_file "if {\[catch {open ${::comd::output_prefix}_walker1_min/walker1_minimized\$cycle.coor r} fid\]} {"
+  puts $tcl_file "if {\[catch {open ${::comd::output_prefix}_walker1_min/walker1_minimized\[expr \$\{cycle\}-1\].coor r} fid\]} {"
   puts $tcl_file "set cycle \[expr \$\{cycle\}-1\]"
   puts $tcl_file "}"
   if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
-    puts $tcl_file "if {\[catch {open ${::comd::output_prefix}_walker2_min/walker2_minimized\$cycle.coor r} fid\]} {"
+    puts $tcl_file "if {\[catch {open ${::comd::output_prefix}_walker2_min/walker2_minimized\[expr \$\{cycle\}-1\].coor r} fid\]} {"
     puts $tcl_file "set cycle \[expr \$\{cycle\}-1\]"
     puts $tcl_file "}"
   }
 
   # Prepare PDB files for ANM-MC (making sure they are aligned if transitioning)
   puts $tcl_file "mol load psf walker1_ionized.psf"
-  puts $tcl_file "mol addfile ${::comd::output_prefix}_walker1_min/walker1_minimized\$cycle.coor"
+  puts $tcl_file "mol addfile ${::comd::output_prefix}_walker1_min/walker1_minimized\[expr \$\{cycle\}-1\].coor"
   puts $tcl_file "set s1 \[atomselect top \"name CA\"\]"
   if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
     puts $tcl_file "set s2 \[atomselect top \"all\"\]"
     puts $tcl_file "mol load psf walker2_ionized.psf"
-    puts $tcl_file "mol addfile ${::comd::output_prefix}_walker2_min/walker2_minimized\$cycle.coor"
+    puts $tcl_file "mol addfile ${::comd::output_prefix}_walker2_min/walker2_minimized\[expr \$\{cycle\}-1\].coor"
     puts $tcl_file "set s3 \[atomselect top \"name CA\"\]"
     puts $tcl_file "set trans_mat \[measure fit \$s1 \$s3\]"
     puts $tcl_file "\$s2 move \$trans_mat"
@@ -990,22 +1027,20 @@ proc ::comd::Prepare_system {} {
 
   if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
     puts $tcl_file "mol delete all"
-  
     puts $tcl_file "mol load psf walker2_ionized.psf"
-    puts $tcl_file "mol addfile ${::comd::output_prefix}_walker2_min/walker2_minimized\$cycle.coor"
+    puts $tcl_file "mol addfile ${::comd::output_prefix}_walker2_min/walker2_minimized\[expr \$\{cycle\}-1\].coor"
     puts $tcl_file "set s1 \[atomselect top \"name CA\"\]"
     puts $tcl_file "set s2 \[atomselect top \"all\"\]"
     puts $tcl_file "mol load psf walker1_ionized.psf"
-    puts $tcl_file "mol addfile ${::comd::output_prefix}_walker1_min/walker1_minimized\$cycle.coor"
+    puts $tcl_file "mol addfile ${::comd::output_prefix}_walker1_min/walker1_minimized\[expr \$\{cycle\}-1\].coor"
     puts $tcl_file "set s3 \[atomselect top \"name CA\"\]"
     puts $tcl_file "set trans_mat \[measure fit \$s1 \$s3\]"
     puts $tcl_file "\$s2 move \$trans_mat"
     puts $tcl_file "\$s1 writepdb starting_walker2.pdb"
     
     puts $tcl_file "mol delete all"
-  
     puts $tcl_file "mol load psf walker2_ionized.psf"
-    puts $tcl_file "mol addfile ${::comd::output_prefix}_walker2_min/walker2_minimized\$cycle.coor"
+    puts $tcl_file "mol addfile ${::comd::output_prefix}_walker2_min/walker2_minimized\[expr \$\{cycle\}-1\].coor"
     puts $tcl_file "set s1 \[atomselect top \"name CA\"\]"
   }
   puts $tcl_file "\$s1 writepdb walker1_target.pdb"
@@ -1014,54 +1049,92 @@ proc ::comd::Prepare_system {} {
     puts $tcl_file "mol delete all"
   
     puts $tcl_file "mol load psf walker1_ionized.psf"
-    puts $tcl_file "mol addfile ${::comd::output_prefix}_walker1_min/walker1_minimized\$cycle.coor"
+    puts $tcl_file "mol addfile ${::comd::output_prefix}_walker1_min/walker1_minimized\[expr \$\{cycle\}-1\].coor"
     puts $tcl_file "set s1 \[atomselect top \"name CA\"\]"
     puts $tcl_file "\$s1 writepdb walker2_target.pdb"
   }
   
   if {$::comd::anm_cutoff eq ""} {set ::comd::anm_cutoff 0}
-  if {$::comd::dev_mag eq ""} {set ::comd::dev_mag 0}
   if {$::comd::accept_para eq ""} {set ::comd::accept_para 0}
   if {$::comd::max_steps eq ""} {set ::comd::max_steps 0}
-  puts $tcl_file "set sh_file \[open \"$::comd::output_prefix.sh\" w\]"
-  puts $tcl_file "set sh_filename \"${::comd::output_prefix}.sh\""
+  if {$::comd::step_cutoff eq ""} {set ::comd::step_cutoff 0}
+  puts $tcl_file "set sh_file \[open \"${::comd::output_prefix}_anmmc_\$cycle.sh\" w\]"
+  puts $tcl_file "set sh_filename \"${::comd::output_prefix}_anmmc_\$cycle.sh\""
   if {[info exists ::comd::num_cores]} {
-    puts $tcl_file "puts \$sh_file \"export MKL_NUM_THREADS=[expr $::comd::num_cores/2]\""
+    puts $tcl_file "puts \$sh_file \"export MKL_NUM_THREADS=$::comd::num_cores\""
   }
-  puts $tcl_file "puts \$sh_file \"\$python_path anmmc.py starting_walker1.pdb walker1_target.pdb $::comd::walker1_pdb $::comd::walker2_pdb \$cycle $::comd::anm_cutoff $::comd::dev_mag $::comd::accept_para $::comd::max_steps \>& cycle_\${cycle}_ini_anmmc_log.txt \&\""
+  puts $tcl_file "puts \$sh_file \"\$python_path anmmc.py starting_walker1.pdb \
+    walker1_target.pdb $::comd::walker1_pdb $::comd::walker2_pdb \$cycle \$::comd::dev_mag \
+    \$::comd::step_cutoff \$::comd::accept_para \$::comd::anm_cutoff \$::comd::max_steps \
+    \>& cycle_\${cycle}_ini_anmmc_log.txt \&\""
   if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
-    puts $tcl_file "puts \$sh_file \"\$python_path anmmc.py starting_walker2.pdb walker2_target.pdb $::comd::walker1_pdb $::comd::walker2_pdb \$cycle $::comd::anm_cutoff $::comd::dev_mag $::comd::accept_para $::comd::max_steps \>& cycle_\${cycle}_fin_anmmc_log.txt \&\""
+    puts $tcl_file "puts \$sh_file \"\$python_path anmmc.py starting_walker2.pdb \
+    walker2_target.pdb $::comd::walker1_pdb $::comd::walker2_pdb \$cycle \$::comd::dev_mag \
+    \$::comd::step_cutoff \$::comd::accept_para \$::comd::anm_cutoff \$::comd::max_steps \
+    \>& cycle_\${cycle}_fin_anmmc_log.txt \&\""
   }
   puts $tcl_file "puts \$sh_file \"wait\""
   puts $tcl_file "close \$sh_file"
+  puts $tcl_file "puts \"Now running ANM Monte-Carlo stepping \$cycle\""
   puts $tcl_file "set status \[catch \{exec bash \$sh_filename\} output\]"
+  puts $tcl_file "puts \"Finished ANM Monte-Carlo stepping \$cycle\""
+
+  # Check if any files are missing and if so raise an error
+  puts $tcl_file "if {\[catch {open ${::comd::output_prefix}_walker1_min/walker1_minimized0.coor r} fid\]} {"
+  puts $tcl_file "set err_file \[open \"$::comd::output_prefix.log\" a\]"
+  puts $tcl_file "puts \$err_file \"ERROR: The original minimization of structure 1 failed. Please try again with a different structure 1.\""
+  puts $tcl_file "exit"
+  puts $tcl_file "}"
+  if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
+    puts $tcl_file "if {\[catch {open ${::comd::output_prefix}_walker2_min/walker2_minimized0.coor r} fid\]} {"
+    puts $tcl_file "set err_file \[open \"$::comd::output_prefix.log\" a\]"
+    puts $tcl_file "puts \$err_file \"ERROR: The original minimization of structure 2 failed. Please try again with a different structure 2.\""
+    puts $tcl_file "exit"
+    puts $tcl_file "}"
+  }
   
   # Prepare adjusted Calpha positions as inputs for TMD (aligning if transitioning)
+  # Check for missing files and raise errors along the way.
   puts $tcl_file "mol delete all"
   puts $tcl_file "mol load psf walker1_ionized.psf"
-  puts $tcl_file "mol addfile ${::comd::output_prefix}_walker1_min/walker1_minimized\$cycle.coor"
+  puts $tcl_file "mol addfile ${::comd::output_prefix}_walker1_min/walker1_minimized\[expr \$\{cycle\}-1\].coor"
   puts $tcl_file "set s1 \[atomselect top \"name CA\"\]"
+  puts $tcl_file "set s2 \[atomselect top \"all\"\]"
+
+  puts $tcl_file "mol load pdb starting_walker1.pdb"
+  puts $tcl_file "if {\[catch {mol addfile cycle_\$\{cycle\}_starting_walker1_walker1_target_final_structure.dcd} \]} {"
+  puts $tcl_file "set err_file \[open \"$::comd::output_prefix.log\" a\]"
+  puts $tcl_file "puts \$err_file \"ERROR: ANM-MC stepping for walker 1 (ini) in cycle \$cycle failed. See the relevant log file.\""
+  puts $tcl_file "exit"
+  puts $tcl_file "}"
+
+  puts $tcl_file "mol addfile cycle_\$\{cycle\}_starting_walker1_walker1_target_final_structure.dcd"
+  puts $tcl_file "set s3 \[atomselect top \"name CA\"\]"
+
   if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
-    puts $tcl_file "set s2 \[atomselect top \"all\"\]"
-    puts $tcl_file "mol load pdb walker2_target.pdb"
-    puts $tcl_file "mol addfile cycle_\$\{cycle\}_starting_walker1_walker1_target_final_structure.dcd"
-    puts $tcl_file "set s3 \[atomselect top \"name CA\"\]"
     puts $tcl_file "set trans_mat \[measure fit \$s1 \$s3\]"
     puts $tcl_file "\$s3 move \$trans_mat"
-    puts $tcl_file "\$s1 set \{x y z\} \[\$s3 get \{x y z\}\]"
   }
+
+  puts $tcl_file "\$s1 set \{x y z\} \[\$s3 get \{x y z\}\]"
   puts $tcl_file "\$s2 set occupancy 0"
   puts $tcl_file "\$s1 set occupancy 1"
   puts $tcl_file "\$s2 writepdb walker1_adjust.pdb"
 
   if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
     puts $tcl_file "mol delete all"
-  
     puts $tcl_file "mol load psf walker2_ionized.psf"
-    puts $tcl_file "mol addfile ${::comd::output_prefix}_walker2_min/walker2_minimized\$cycle.coor"
+    puts $tcl_file "mol addfile ${::comd::output_prefix}_walker2_min/walker2_minimized\[expr \$\{cycle\}-1\].coor"
     puts $tcl_file "set s1 \[atomselect top \"name CA\"\]"
     puts $tcl_file "set s2 \[atomselect top \"all\"\]"
-    puts $tcl_file "mol load pdb walker1_target.pdb"
+
+    puts $tcl_file "if {\[catch {mol addfile cycle_\$\{cycle\}_starting_walker2_walker2_target_final_structure.dcd} \]} {"
+    puts $tcl_file "set err_file \[open \"$::comd::output_prefix.log\" a\]"
+    puts $tcl_file "puts \$err_file \"ERROR: ANM-MC stepping for walker 2 (ini) in cycle \$cycle failed. See the relevant log file.\""
+    puts $tcl_file "exit"
+    puts $tcl_file "}"
+
+    puts $tcl_file "mol load pdb starting_walker2.pdb"
     puts $tcl_file "mol addfile cycle_\$\{cycle\}_starting_walker2_walker2_target_final_structure.dcd"
     puts $tcl_file "set s3 \[atomselect top \"name CA\"\]"
     puts $tcl_file "set trans_mat \[measure fit \$s1 \$s3\]"
@@ -1073,18 +1146,10 @@ proc ::comd::Prepare_system {} {
   }
 
   ###### TARGETED MD ########
-  puts $tcl_file "set sh_file \[open \"$::comd::output_prefix.sh\" w\]"
-  puts $tcl_file "set sh_filename \"${::comd::output_prefix}.sh\""
+  puts $tcl_file "set sh_file \[open \"${::comd::output_prefix}_tmd_\$cycle.sh\" w\]"
+  puts $tcl_file "set sh_filename \"${::comd::output_prefix}_tmd_\$cycle.sh\""
   puts $tcl_file "puts \$sh_file \"\\\#\\\!\\\/bin\\\/bash\""
-  if {[info exists ::comd::gpu_selected] && [info exists ::comd::num_cores]} { 
-    puts $tcl_file "puts \$sh_file \"NAMD=\\\"\$namd2path \+p[expr $::comd::num_cores/2] \+devices $::comd::gpus_selected\\\"\"" 
-  } elseif {[info exists ::comd::gpu_selected]} {
-    puts $tcl_file "puts \$sh_file \"NAMD=\\\"\$namd2path \+devices $::comd::gpus_selected\\\"\""
-  } elseif {[info exists ::comd:num_cores]} {
-    puts $tcl_file "puts \$sh_file \"NAMD=\\\"\$namd2path \+p[expr $::comd::num_cores/2] \\\"\""
-  } else {
-    puts $tcl_file "puts \$sh_file \"NAMD=\\\"\$namd2path \\\"\""
-  }
+  puts $tcl_file "puts \$sh_file \"NAMD=\\\"\$namd2path \\\"\""
 
   # Walker 1 TMD
   puts $tcl_file "set namd_file \[open \[file join \"${::comd::output_prefix}_walker1_pro\" \"pro.conf\"\] w\]"
@@ -1100,9 +1165,9 @@ proc ::comd::Prepare_system {} {
   }
 
   puts $tcl_file "puts \$namd_file \"set restartname res\""
-  puts $tcl_file "puts \$namd_file \"bincoordinates ..\/${::comd::output_prefix}_walker1_min\/walker1_minimized\$\{cycle\}.coor\""
-  puts $tcl_file "puts \$namd_file \"binvelocities ..\/${::comd::output_prefix}_walker1_min\/walker1_minimized\$\{cycle\}.vel\""
-  puts $tcl_file "puts \$namd_file \"extendedSystem ..\/${::comd::output_prefix}_walker1_min\/walker1_minimized\$\{cycle\}.xst\""
+  puts $tcl_file "puts \$namd_file \"bincoordinates ..\/${::comd::output_prefix}_walker1_min\/walker1_minimized\[expr \$\{cycle\}-1\].coor\""
+  puts $tcl_file "puts \$namd_file \"binvelocities ..\/${::comd::output_prefix}_walker1_min\/walker1_minimized\[expr \$\{cycle\}-1\].vel\""
+  puts $tcl_file "puts \$namd_file \"extendedSystem ..\/${::comd::output_prefix}_walker1_min\/walker1_minimized\[expr \$\{cycle\}-1\].xst\""
   puts $tcl_file "puts \$namd_file \"wrapWater on\""
   puts $tcl_file "puts \$namd_file \"wrapAll on\""
   puts $tcl_file "puts \$namd_file \"exclude         scaled1-4\""
@@ -1124,21 +1189,21 @@ proc ::comd::Prepare_system {} {
   puts $tcl_file "puts \$namd_file \"langevinHydrogen on\""
   puts $tcl_file "puts \$namd_file \"TMD on\""
   puts $tcl_file "puts \$namd_file \"TMDk $::comd::spring_k\""
-  puts $tcl_file "puts \$namd_file \"TMDOutputFreq 2500\""
+  puts $tcl_file "puts \$namd_file \"TMDOutputFreq [expr $::comd::tmd_len*1]\""
   puts $tcl_file "puts \$namd_file \"TMDFile ..\/walker1_adjust.pdb\""
   puts $tcl_file "puts \$namd_file \"TMDFirstStep 0\""
-  puts $tcl_file "puts \$namd_file \"TMDLastStep [expr $::comd::tmd_len*500]\""
+  puts $tcl_file "puts \$namd_file \"TMDLastStep [expr $::comd::tmd_len*5]\""
   puts $tcl_file "puts \$namd_file \"outputname \\\$outputname\""
   puts $tcl_file "puts \$namd_file \"restartname \\\$restartname\""
-  puts $tcl_file "puts \$namd_file \"outputEnergies 2500\""
-  puts $tcl_file "puts \$namd_file \"outputPressure 2500\""
-  puts $tcl_file "puts \$namd_file \"restartfreq 2500\""
-  puts $tcl_file "puts \$namd_file \"dcdfreq [expr $::comd::tmd_len*100]\""
-  puts $tcl_file "puts \$namd_file \"xstfreq [expr $::comd::tmd_len*100]\""
-  puts $tcl_file "puts \$namd_file \"run [expr $::comd::tmd_len*500]\""
+  puts $tcl_file "puts \$namd_file \"outputEnergies [expr $::comd::tmd_len*1]\""
+  puts $tcl_file "puts \$namd_file \"outputPressure [expr $::comd::tmd_len*1]\""
+  puts $tcl_file "puts \$namd_file \"restartfreq [expr $::comd::tmd_len*1]\""
+  puts $tcl_file "puts \$namd_file \"dcdfreq [expr $::comd::tmd_len*1]\""
+  puts $tcl_file "puts \$namd_file \"xstfreq [expr $::comd::tmd_len*1]\""
+  puts $tcl_file "puts \$namd_file \"run [expr $::comd::tmd_len*5]\""
   puts $tcl_file "close \$namd_file"
   puts $tcl_file "puts \$sh_file \"cd ${::comd::output_prefix}_walker1_pro\""
-  puts $tcl_file "puts \$sh_file \"\\\$NAMD pro.conf > pro\$\{cycle\}.log \&\""
+  puts $tcl_file "puts \$sh_file \"\\\$NAMD \+devices $::comd::gpus_selection1 \+ppn $processes_per_run pro.conf > pro\$\{cycle\}.log \&\""
   puts $tcl_file "puts \$sh_file \"cd ..\""
 
   if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
@@ -1156,9 +1221,9 @@ proc ::comd::Prepare_system {} {
     }
 
     puts $tcl_file "puts \$namd_file \"set restartname res\""
-    puts $tcl_file "puts \$namd_file \"bincoordinates ..\/${::comd::output_prefix}_walker2_min\/walker2_minimized\$\{cycle\}.coor\""
-    puts $tcl_file "puts \$namd_file \"binvelocities ..\/${::comd::output_prefix}_walker2_min\/walker2_minimized\$\{cycle\}.vel\""
-    puts $tcl_file "puts \$namd_file \"extendedSystem ..\/${::comd::output_prefix}_walker2_min\/walker2_minimized\$\{cycle\}.xst\""
+    puts $tcl_file "puts \$namd_file \"bincoordinates ..\/${::comd::output_prefix}_walker2_min\/walker2_minimized\[expr \$\{cycle\}-1\].coor\""
+    puts $tcl_file "puts \$namd_file \"binvelocities ..\/${::comd::output_prefix}_walker2_min\/walker2_minimized\[expr \$\{cycle\}-1\].vel\""
+    puts $tcl_file "puts \$namd_file \"extendedSystem ..\/${::comd::output_prefix}_walker2_min\/walker2_minimized\[expr \$\{cycle\}-1\].xst\""
     puts $tcl_file "puts \$namd_file \"wrapWater on\""
     puts $tcl_file "puts \$namd_file \"wrapAll on\""
     puts $tcl_file "puts \$namd_file \"exclude         scaled1-4\""
@@ -1180,51 +1245,51 @@ proc ::comd::Prepare_system {} {
     puts $tcl_file "puts \$namd_file \"langevinHydrogen on\""
     puts $tcl_file "puts \$namd_file \"TMD on\""
     puts $tcl_file "puts \$namd_file \"TMDk $::comd::spring_k\""
-    puts $tcl_file "puts \$namd_file \"TMDOutputFreq 2500\""
+    puts $tcl_file "puts \$namd_file \"TMDOutputFreq [expr $::comd::tmd_len*1]\""
     puts $tcl_file "puts \$namd_file \"TMDFile ..\/walker2_adjust.pdb\""
     puts $tcl_file "puts \$namd_file \"TMDFirstStep 0\""
-    puts $tcl_file "puts \$namd_file \"TMDLastStep [expr $::comd::tmd_len*500]\""
+    puts $tcl_file "puts \$namd_file \"TMDLastStep [expr $::comd::tmd_len*5]\""
     puts $tcl_file "puts \$namd_file \"outputname \\\$outputname\""
     puts $tcl_file "puts \$namd_file \"restartname \\\$restartname\""
-    puts $tcl_file "puts \$namd_file \"outputEnergies 2500\""
-    puts $tcl_file "puts \$namd_file \"outputPressure 2500\""
-    puts $tcl_file "puts \$namd_file \"restartfreq 2500\""
-    puts $tcl_file "puts \$namd_file \"dcdfreq [expr $::comd::tmd_len*100]\""
-    puts $tcl_file "puts \$namd_file \"xstfreq [expr $::comd::tmd_len*100]\""
-    puts $tcl_file "puts \$namd_file \"run [expr $::comd::tmd_len*500]\""
+    puts $tcl_file "puts \$namd_file \"outputEnergies [expr $::comd::tmd_len*1]\""
+    puts $tcl_file "puts \$namd_file \"outputPressure [expr $::comd::tmd_len*1]\""
+    puts $tcl_file "puts \$namd_file \"restartfreq [expr $::comd::tmd_len*1]\""
+    puts $tcl_file "puts \$namd_file \"dcdfreq [expr $::comd::tmd_len*1]\""
+    puts $tcl_file "puts \$namd_file \"xstfreq [expr $::comd::tmd_len*1]\""
+    puts $tcl_file "puts \$namd_file \"run [expr $::comd::tmd_len*5]\""
     puts $tcl_file "close \$namd_file"
     puts $tcl_file "puts \$sh_file \"cd ${::comd::output_prefix}_walker2_pro\""
-    puts $tcl_file "puts \$sh_file \"\\\$NAMD pro.conf > pro\$\{cycle\}.log \&\""
+    puts $tcl_file "puts \$sh_file \"\\\$NAMD \+devices $::comd::gpus_selection2 \+ppn $processes_per_run pro.conf > pro\$\{cycle\}.log \&\""
     puts $tcl_file "puts \$sh_file \"cd ..\""
   }
-
   puts $tcl_file "puts \$sh_file \"wait\""
   puts $tcl_file "close \$sh_file"
+  puts $tcl_file "puts \"Now running TMD \$\{cycle\}\""
   puts $tcl_file "set status \[catch \{exec bash \$sh_filename\} output\]"
 
+  puts $tcl_file "if {\$status} {"
+  puts $tcl_file "set err_file \[open \"$::comd::output_prefix.log\" a\]"
+  puts $tcl_file "puts \$err_file \"ERROR: \$output\""
+  puts $tcl_file "exit"
+  puts $tcl_file "}"
+
+  puts $tcl_file "puts \"Finished TMD \$\{cycle\}\""
+
   # If any files are missing continue to the end of the cycle and end up going back to this cycle again
-  puts $tcl_file "if {\[catch {open ${::comd::output_prefix}_walker1_min/walker1_minimized\[expr \$\{cycle\}+1\].coor r} fid\]} {"
+  puts $tcl_file "if {\[catch {open ${::comd::output_prefix}_walker1_pro/walker1_process\$\{cycle\}.coor r} fid\]} {"
   puts $tcl_file "continue"
- puts $tcl_file "}"
+  puts $tcl_file "}"
   if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
-    puts $tcl_file "if {\[catch {open ${::comd::output_prefix}_walker2_min/walker2_minimized\[expr \$\{cycle\}+1\].coor r} fid\]} {"
+    puts $tcl_file "if {\[catch {open ${::comd::output_prefix}_walker1_pro/walker1_process\$\{cycle\}.coor r} fid\]} {"
     puts $tcl_file "continue"
     puts $tcl_file "}"
   }
 
   ###### MINIMIZATION AT THE END OF THE LOOP ########
-  puts $tcl_file "set sh_file \[open \"$::comd::output_prefix.sh\" w\]"
-  puts $tcl_file "set sh_filename \"${::comd::output_prefix}.sh\""
+  puts $tcl_file "set sh_file \[open \"${::comd::output_prefix}_min_\$cycle.sh\" w\]"
+  puts $tcl_file "set sh_filename \"${::comd::output_prefix}_min_\$cycle.sh\""
   puts $tcl_file "puts \$sh_file \"\\\#\\\!\\\/bin\\\/bash\""
-  if {[info exists ::comd::gpu_selected] && [info exists ::comd::num_cores]} { 
-    puts $tcl_file "puts \$sh_file \"NAMD=\\\"\$namd2path \+p[expr $::comd::num_cores/2] \+devices $::comd::gpus_selected\\\"\"" 
-  } elseif {[info exists ::comd::gpu_selected]} {
-    puts $tcl_file "puts \$sh_file \"NAMD=\\\"\$namd2path \+devices $::comd::gpus_selected\\\"\""
-  } elseif {[info exists ::comd:num_cores]} {
-    puts $tcl_file "puts \$sh_file \"NAMD=\\\"\$namd2path \+p[expr $::comd::num_cores/2] \\\"\""
-  } else {
-    puts $tcl_file "puts \$sh_file \"NAMD=\\\"\$namd2path \\\"\""
-  }
+  puts $tcl_file "puts \$sh_file \"NAMD=\\\"\$namd2path \\\"\""
 
   # Walker 1 minimization
   puts $tcl_file "set namd_file \[open \[file join \"${::comd::output_prefix}_walker1_min\" \"min.conf\"\] w\]"
@@ -1264,16 +1329,16 @@ proc ::comd::Prepare_system {} {
   puts $tcl_file "puts \$namd_file \"langevinHydrogen on\""
   puts $tcl_file "puts \$namd_file \"outputname \\\$outputname\""
   puts $tcl_file "puts \$namd_file \"restartname \\\$restartname\""
-  puts $tcl_file "puts \$namd_file \"outputEnergies [expr $::comd::min_length*100]\""
-  puts $tcl_file "puts \$namd_file \"outputPressure [expr $::comd::min_length*100]\""
-  puts $tcl_file "puts \$namd_file \"restartfreq [expr $::comd::min_length*100]\""
-  puts $tcl_file "puts \$namd_file \"dcdfreq [expr $::comd::min_length*100]\""
-  puts $tcl_file "puts \$namd_file \"xstfreq [expr $::comd::min_length*100]\""
-  puts $tcl_file "puts \$namd_file \"minimize [expr $::comd::min_length*500]\""
+  puts $tcl_file "puts \$namd_file \"outputEnergies $::comd::min_length\""
+  puts $tcl_file "puts \$namd_file \"outputPressure $::comd::min_length\""
+  puts $tcl_file "puts \$namd_file \"restartfreq $::comd::min_length\""
+  puts $tcl_file "puts \$namd_file \"dcdfreq [expr ${::comd::min_length}*5]\""
+  puts $tcl_file "puts \$namd_file \"xstfreq [expr ${::comd::min_length}*5]\""
+  puts $tcl_file "puts \$namd_file \"minimize [expr ${::comd::min_length}*5]\""
   puts $tcl_file "puts \$namd_file \"reinitvels \\\$temperature\""
   puts $tcl_file "close \$namd_file"
   puts $tcl_file "puts \$sh_file \"cd ${::comd::output_prefix}_walker1_min\""
-  puts $tcl_file "puts \$sh_file \"\\\$NAMD min.conf > min\[expr \$\{cycle\}+1\].log \&\""
+  puts $tcl_file "puts \$sh_file \"\\\$NAMD \+devices $::comd::gpus_selection1 \+ppn $processes_per_run min.conf > min\$\{cycle\}.log \&\""
   puts $tcl_file "puts \$sh_file \"cd ..\""
 
   if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
@@ -1315,37 +1380,47 @@ proc ::comd::Prepare_system {} {
     puts $tcl_file "puts \$namd_file \"langevinHydrogen on\""
     puts $tcl_file "puts \$namd_file \"outputname \\\$outputname\""
     puts $tcl_file "puts \$namd_file \"restartname \\\$restartname\""
-    puts $tcl_file "puts \$namd_file \"outputEnergies [expr $::comd::min_length*100]\""
-    puts $tcl_file "puts \$namd_file \"outputPressure [expr $::comd::min_length*100]\""
-    puts $tcl_file "puts \$namd_file \"restartfreq [expr $::comd::min_length*100]\""
-    puts $tcl_file "puts \$namd_file \"dcdfreq [expr $::comd::min_length*100]\""
-    puts $tcl_file "puts \$namd_file \"xstfreq [expr $::comd::min_length*100]\""
-    puts $tcl_file "puts \$namd_file \"minimize [expr $::comd::min_length*500]\""
+    puts $tcl_file "puts \$namd_file \"outputEnergies $::comd::min_length\""
+    puts $tcl_file "puts \$namd_file \"outputPressure $::comd::min_length\""
+    puts $tcl_file "puts \$namd_file \"restartfreq $::comd::min_length\""
+    puts $tcl_file "puts \$namd_file \"dcdfreq [expr $::comd::min_length*5]\""
+    puts $tcl_file "puts \$namd_file \"xstfreq [expr $::comd::min_length*5]\""
+    puts $tcl_file "puts \$namd_file \"minimize [expr $::comd::min_length*5]\""
     puts $tcl_file "puts \$namd_file \"reinitvels \\\$temperature\""
     puts $tcl_file "close \$namd_file"
     puts $tcl_file "puts \$sh_file \"cd ${::comd::output_prefix}_walker2_min\""
-    puts $tcl_file "puts \$sh_file \"\\\$NAMD min.conf > min\[expr \$\{cycle\}+1\].log \&\""
+    puts $tcl_file "puts \$sh_file \"\\\$NAMD \+devices $::comd::gpus_selection2 \+ppn $processes_per_run min.conf > min\$\{cycle\}.log \&\""
     puts $tcl_file "puts \$sh_file \"cd ..\""
   }
 
   puts $tcl_file "puts \$sh_file \"wait\""
   puts $tcl_file "close \$sh_file"
+  puts $tcl_file "puts \"Now running minimization \$\{cycle\}\""
   puts $tcl_file "set status \[catch \{exec bash \$sh_filename\} output\]"
 
+  puts $tcl_file "if {\$status} {"
+  puts $tcl_file "set err_file \[open \"$::comd::output_prefix.log\" a\]"
+  puts $tcl_file "puts \$err_file \"ERROR: \$output\""
+  puts $tcl_file "exit"
+  puts $tcl_file "}"
+
+  puts $tcl_file "puts \"Finished minimization \$\{cycle\}\""
+
   # Add the resulting PDBs to DCD files with the other ones from previous cycles
-  puts $tcl_file "set status \[catch \{exec prody catdcd initr.dcd ${::comd::output_prefix}_walker1_min\/walker1_minimized\[expr \$\{cycle\}+1\].dcd -o walker1_trajectory.dcd\} output\]"
+  puts $tcl_file "set status \[catch \{exec prody catdcd initr.dcd ${::comd::output_prefix}_walker1_min\/walker1_minimized\$\{cycle\}.dcd -o walker1_trajectory.dcd\} output\]"
   puts $tcl_file "set status \[catch \{exec mv walker1_trajectory.dcd initr.dcd\} output\]" 
   if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
-    puts $tcl_file "set status \[catch \{exec prody catdcd fintr.dcd ${::comd::output_prefix}_walker2_min\/walker2_minimized\[expr \$\{cycle\}+1\].dcd -o walker2_trajectory.dcd\} output\]"
+    puts $tcl_file "set status \[catch \{exec prody catdcd fintr.dcd ${::comd::output_prefix}_walker2_min\/walker2_minimized\$\{cycle\}.dcd -o walker2_trajectory.dcd\} output\]"
     puts $tcl_file "set status \[catch \{exec mv walker2_trajectory.dcd fintr.dcd\} output\]"
   }
+  puts $tcl_file "puts \"Finished concatenating trajectories for cycle \$\{cycle\}\""
 
   # If files are missing continue to the end of the loop and the next loop will retry this cycle
-  puts $tcl_file "if {\[catch {open ${::comd::output_prefix}_walker1_min/walker1_minimized\[expr \$\{cycle\}+1\].coor r} fid\]} {"
+  puts $tcl_file "if {\[catch {open ${::comd::output_prefix}_walker1_min/walker1_minimized\$\{cycle\}.coor r} fid\]} {"
   puts $tcl_file "continue"
   puts $tcl_file "}"
   if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} {
-    puts $tcl_file "if {\[catch {open ${::comd::output_prefix}_walker2_min/walker2_minimized\[expr \$\{cycle\}+1\].coor r} fid\]} {"
+    puts $tcl_file "if {\[catch {open ${::comd::output_prefix}_walker2_min/walker2_minimized\$\{cycle\}.coor r} fid\]} {"
     puts $tcl_file "continue"
     puts $tcl_file "}"
   }
@@ -1364,9 +1439,9 @@ proc ::comd::Prepare_system {} {
     puts $tcl_file "set trans_mat \[measure fit \$sel2 \$sel1\]"
     puts $tcl_file "\$sel2a move \$trans_mat"
     puts $tcl_file "set rmsd \[measure rmsd \$sel2 \$sel1\]"
-    puts $tcl_file "set all_rmsd(\[expr \$\{cycle\}+1\]) \$rmsd"
+    puts $tcl_file "set all_rmsd(\$\{cycle\}) \$rmsd"
     puts $tcl_file "puts \$rmsd"
-    puts $tcl_file "if \{\(\$rmsd < 1.5)\|\|(\[expr \$all_rmsd\(\$\{cycle\}\) - \$all_rmsd\(\[expr \$\{cycle\+1\]\)\]\ < 0.15 \)\} \{ break \}"
+    puts $tcl_file "if \{\(\$rmsd < 1.5)\|\|(\[expr \$all_rmsd\(\[expr \$\{cycle\}\-1\]\) - \$rmsd]\ < 0.15 \)\} \{ break \}"
   }
 
   # end loop
@@ -1377,6 +1452,8 @@ proc ::comd::Prepare_system {} {
   if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}]} { 
     puts $tcl_file "set status \[catch \{exec mv fintr.dcd walker2_trajectory.dcd\} output\]" 
   }
+  #AJ
+  puts $tcl_file "exit"
   close $tcl_file
   file delete pro_formatted.pdb
   file delete pro_formatted_autopsf.pdb
@@ -1392,14 +1469,13 @@ proc ::comd::Prepare_system {} {
 
   if {[info exists ::comd::from_commandline] == 0} {
     ::comd::Logview [file join "$::comd::outputdir" "$::comd::output_prefix.log"]
-
     tk_messageBox -type ok -title "Setup Complete" \
       -message "Setup of $::comd::output_prefix is complete. See $::comd::output_prefix.log file."
   }
 
   if {$::comd::run_now} {
     puts "Now running"
-    cd $::comd::outputdir
+    cd $::comd::start_dir
     source $tcl_file_name
     puts "Finished"
   }
@@ -1415,58 +1491,154 @@ if { $argc < 3 } {
   puts "Please provide the same filename twice to calculate a random walk "
   puts "rather than a transition."
 } else {
-  set num_args 24
 
-  # Take parameter values from input arguments as far as possible
-  for {set index 0} {$index < $argc -1} {incr index} {
-    if {$index eq 0} {set ::comd::walker1_pdb [lindex $argv $index]}
-    if {$index eq 1} {set ::comd::walker2_pdb [lindex $argv $index]}
-    if {$index eq 2} {set ::comd::walker1_chid [lindex $argv $index]}
-    if {$index eq 3} {set ::comd::walker2_chid [lindex $argv $index]}
-    if {$index eq 4} {set ::comd::solvent_padding_x [lindex $argv $index]}
-    if {$index eq 5} {set ::comd::solvent_padding_y [lindex $argv $index]}
-    if {$index eq 6} {set ::comd::solvent_padding_z [lindex $argv $index]}
-    if {$index eq 7} {set ::comd::topo_file [lindex $argv $index]}
-    if {$index eq 8} {set ::comd::temperature [lindex $argv $index]}
-    if {$index eq 9} {set ::comd::min_length [lindex $argv $index]}
-    if {$index eq 10} {set ::comd::para_file [list [lindex $argv $index]]}
-    if {$index eq 11} {set ::comd::anm_cutoff [lindex $argv $index]}
-    if {$index eq 12} {set ::comd::dev_mag [lindex $argv $index]}
-    if {$index eq 13} {set ::comd::accept_para [lindex $argv $index]}
-    if {$index eq 14} {set ::comd::max_steps [lindex $argv $index]}
-    if {$index eq 15} {set ::comd::spring_k [lindex $argv $index]}
-    if {$index eq 16} {set ::comd::tmd_len [lindex $argv $index]}
-    if {$index eq 17} {set ::comd::comd_cycle [lindex $argv $index]}
-    if {$index eq 18} {set ::comd::gpus_selected [lindex $argv $index]}
-    if {$index eq 19} {set ::comd::num_cores [lindex $argv $index]}
-    if {$index eq 20} {set ::comd::outputdir [lindex $argv $index]}
-    if {$index eq 21} {set ::comd::output_prefix [lindex $argv $index]}
-    if {$index eq 22} {set ::comd::run_now [lindex $argv $index]}
+  if {[catch {
+    set num_args 25
+
+    # Take parameter values from input arguments as far as possible
+    for {set index 0} {$index < $argc -1} {incr index} {
+      if {$index eq  0} {set ::comd::outputdir [lindex $argv $index]}
+      if {$index eq  1} {set ::comd::output_prefix [lindex $argv $index]}
+      if {$index eq  2} {set ::comd::walker1_pdb [lindex $argv $index]}
+      if {$index eq  3} {set ::comd::walker2_pdb [lindex $argv $index]}
+      if {$index eq  4} {
+        set ::comd::comd_cycle [lindex $argv $index]
+	set ::comd::comd_cycle [expr ${::comd::comd_cycle}+1]
+      }
+      if {$index eq  5} {
+        set ::comd::dev_mag [lindex $argv $index]
+        set ::comd::dev_mag [expr $::comd::dev_mag]
+      }
+      if {$index eq  6} {
+        set ::comd::accept_para [lindex $argv $index]
+        set ::comd::accept_para [expr $::comd::accept_para]
+      }
+      if {$index eq  7} {
+        set ::comd::step_cutoff [lindex $argv $index]
+        set ::comd::step_cutoff [expr $::comd::step_cutoff]
+      }
+      if {$index eq  8} {
+        set ::comd::min_length [lindex $argv $index]
+        set ::comd::min_length [expr int($::comd::min_length * 100)]
+      }
+      if {$index eq  9} {
+        set ::comd::tmd_len [lindex $argv $index]
+        set ::comd::tmd_len [expr int($::comd::tmd_len * 100)]
+      }
+      if {$index eq 10} {set ::comd::anm_cutoff [lindex $argv $index]}
+      if {$index eq 11} {set ::comd::max_steps [lindex $argv $index]}
+      if {$index eq 12} {set ::comd::accept_para [lindex $argv $index]}
+      if {$index eq 13} {set ::comd::walker1_chid [lindex $argv $index]}
+      if {$index eq 14} {set ::comd::walker2_chid [lindex $argv $index]}
+      if {$index eq 15} {set ::comd::solvent_padding_x [lindex $argv $index]}
+      if {$index eq 16} {set ::comd::solvent_padding_y [lindex $argv $index]}
+      if {$index eq 17} {set ::comd::solvent_padding_z [lindex $argv $index]}
+      if {$index eq 18} {set ::comd::topo_file [lindex $argv $index]}
+      if {$index eq 19} {set ::comd::temperature [lindex $argv $index]}
+      if {$index eq 20} {set ::comd::para_file [list [lindex $argv $index]]}
+      if {$index eq 21} {set ::comd::spring_k [lindex $argv $index]}
+      if {$index eq 22} {
+        set ::comd::gpus_selected [lindex $argv $index]
+        set ::comd::gpus_present 1
+      }
+      if {$index eq 23} {set ::comd::num_cores [lindex $argv $index]}
+      if {$index eq 24} {set ::comd::run_now [lindex $argv $index]}
+    }
+
+    # Fill in the remaining values with defaults
+    for {set index $index} {$index < $num_args} {incr index} {
+      if {$index eq  4} {set ::comd::comd_cycle 100}
+      if {$index eq  5} {set ::comd::dev_mag 0}
+      if {$index eq  6} {set ::comd::accept_para ""}
+      if {$index eq  7} {set ::comd::step_cutoff 0}
+      if {$index eq  8} {set ::comd::min_length 100}
+      if {$index eq  9} {set ::comd::tmd_len 10}
+      if {$index eq 10} {set ::comd::anm_cutoff ""}
+      if {$index eq 11} {set ::comd::max_steps [lindex $argv $index]}
+      if {$index eq 15} {set ::comd::solvent_padding_x 10}
+      if {$index eq 16} {set ::comd::solvent_padding_y 10}
+      if {$index eq 17} {set ::comd::solvent_padding_z 10}
+      if {$index eq 18} {set ::comd::topo_file [list]}
+      if {$index eq 19} {set ::comd::temperature 298}
+      if {$index eq 20} {set ::comd::para_file [list]}
+      if {$index eq 21} {set ::comd::spring_k 20000}
+      if {$index eq 22} {
+        if {[catch {
+          set output [eval exec "nvidia-smi"]
+          set records [split $output "\n"]
+
+          set j 0
+          foreach rec $records {
+            incr j
+          }
+
+          set k 0
+          set i 0
+          set done_header 0
+          set ::comd::gpus_selected [list]
+          foreach rec $records {
+            set fields [split $rec]
+
+            if {$k > [expr {$j-11}]} {break}
+
+            if {$i == 6 && $done_header == 0} {
+              set done_header 1
+              set i 0
+            } elseif {$done_header && $i == 1} {
+              set fields [split $rec " "]
+              lappend ::comd::gpus_selected [lindex $fields 3]
+            } elseif {$done_header && $i == 3} {
+              set i 0
+            }
+
+            incr i
+            incr k
+          }
+
+          set ::comd::gpus_selected [join $::comd::gpus_selected ","]
+
+          if {[expr {$::comd::walker1_pdb}] ne [expr {$::comd::walker2_pdb}] || [expr [llength $::comd::gpus_selected] == 1]} {
+            set gpus_selected [wsplit $::comd::gpus_selected ","]
+            set selection1 [list]
+            set selection2 [list]
+            for {set i 0} {$i < [expr [llength $gpus_selected]/2]} {incr i} {
+              lappend selection1 [lindex $gpus_selected $i]
+              lappend selection2 [lindex $gpus_selected [expr {${i} + [llength $gpus_selected]/2 }]]
+            }
+            set ::comd::gpus_selection1 [join $selection1 ","]
+            set ::comd::gpus_selection2 [join $selection2 ","]
+          } else {
+            set ::comd::gpus_selection1 $::comd::gpus_selected
+            set ::comd::gpus_selection2 $::comd::gpus_selected
+          }
+          puts $::comd::gpus_selection1
+          puts [llength [wsplit $::comd::gpus_selection1 ","]]
+        }]} {
+          set ::comd::gpus_present 0
+        } else {
+          set ::comd::gpus_present 1
+        }
+      }
+      if {$index eq 23} {
+        set ::comd::num_cores [expr {[eval exec "cat /proc/cpuinfo | grep processor | tail -n 1 | awk \" \{ print \\\$3 \} \""] + 1}]}
+      if {$index eq 24} {set ::comd::run_now 1}
+      if {$index eq 25} {set ::comd::from_commandline 1}
+    }
+
+    set ::comd::start_dir [pwd]
+    ::comd::Prepare_system
+    exit
+
+  } result ]} {
+    puts "coMD simulation FINISHED successfully"
+    set log_file [open [file join "$::comd::outputdir" "$::comd::output_prefix.log"] a]
+    puts $log_file "coMD simulation FINISHED successfully"
+    close $log_file
+  } else {
+    puts "$result"
+    set log_file [open [file join "$::comd::outputdir" "$::comd::output_prefix.log"] a] 
+    puts $log_file "ERROR: $result"
+    close $log_file
   }
-
-  # Fill in the remaining values with defaults
-  for {set index $index} {$index < $num_args} {incr index} {
-    if {$index eq 4} {set ::comd::solvent_padding_x 10}
-    if {$index eq 5} {set ::comd::solvent_padding_y 10}
-    if {$index eq 6} {set ::comd::solvent_padding_z 10}
-    if {$index eq 7} {set ::comd::topo_file [list]}
-    if {$index eq 8} {set ::comd::temperature 298}
-    if {$index eq 9} {set ::comd::min_length 1}
-    if {$index eq 10} {set ::comd::para_file [list]}
-    if {$index eq 11} {set ::comd::anm_cutoff ""}
-    if {$index eq 12} {set ::comd::dev_mag ""}
-    if {$index eq 13} {set ::comd::accept_para ""}
-    if {$index eq 14} {set ::comd::max_steps ""}
-    if {$index eq 15} {set ::comd::spring_k 20000}
-    if {$index eq 16} {set ::comd::tmd_len 10}
-    if {$index eq 17} {set ::comd::comd_cycle 30}
-    if {$index eq 20} {set ::comd::outputdir [file join [pwd] "test8"]}
-    if {$index eq 21} {set ::comd::output_prefix "test8"}
-    if {$index eq 22} {set ::comd::run_now 1}
-    if {$index eq 23} {set ::comd::from_commandline 1}
-  }
-
-  ::comd::Prepare_system
-
-  exit
 }
+
