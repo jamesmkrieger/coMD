@@ -63,7 +63,7 @@ stepcutoff = 0.5 * (len(initial_pdb_ca) ** 0.5)
 # ANM calculation based on current
 pdb_anm = ANM('pdb ca')
 pdb_anm.buildHessian(initial_pdb_ca, cutoff=anm_cut)
-pdb_anm.calcModes(n_modes='all')
+pdb_anm.calcModes()
 
 # Cumulative sum vector preparation for metropolis sampling
 eigs = 1/sqrt(pdb_anm.getEigvals())
