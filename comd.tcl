@@ -1009,12 +1009,14 @@ proc ::comd::Prepare_system {} {
     puts $tcl_file "set all_rmsd_fixB_walker1(0) \$rmsd"
     puts $tcl_file "puts \$rmsd_file \"\$rmsd\""
     puts $tcl_file "puts \$rmsd_file_new \"\$rmsd, \$rmsd\""
+    puts $tcl_file "set rmsd_percent \[expr \$\{rmsd\}*0.05\]"
     puts $tcl_file "file mkdir ${::comd::output_prefix}_walker2_pro"
   }
 
   puts $tcl_file "file mkdir ${::comd::output_prefix}_walker1_pro"
 
   #loop start
+  puts $tcl_file "puts \"TESTING THE NEW COMD VERSION\""
   puts $tcl_file "set repetition 0"
   puts $tcl_file "set repetition_walker1 1"
   puts $tcl_file "set repetition_walker2 1"
@@ -1507,7 +1509,7 @@ proc ::comd::Prepare_system {} {
     puts $tcl_file "set repetition_walker2 1"
     puts $tcl_file "set repetition_flag 0"
 
-    puts $tcl_file "if \{\(\(\[expr \$all_rmsd_fixB_walker1\(\[expr \$\{cycle\}-1\]\) < \$rmsd_fixB_walker1\]\) \&\& \(\[expr \$all_rmsd_fixA_walker2\(\[expr \$\{cycle\}-1\]\) > \$rmsd_fixA_walker2\]\)\)\} \{"
+    puts $tcl_file "if \{\(\(\[expr \(\[expr \$all_rmsd_fixB_walker1\(\[expr \$\{cycle\}-1\]\)+\$rmsd_percent\]\) < \$rmsd_fixB_walker1\]\) \&\& \(\[expr \(\[expr \$all_rmsd_fixA_walker2\(\[expr \$\{cycle\}-1\]\)+\$rmsd_percent\]\) > \$rmsd_fixA_walker2\]\)\)\} \{"
     puts $tcl_file "puts \"WALKER1 NEEDS TO BE REPEATED\""
     puts $tcl_file "set repetition \[expr \{\$repetition + 1\}\]"
     puts $tcl_file "set repetition_walker1 1"
@@ -1515,7 +1517,7 @@ proc ::comd::Prepare_system {} {
     puts $tcl_file "set repetition_flag 1"
     puts $tcl_file "\}"
 
-    puts $tcl_file "if \{\(\(\[expr \$all_rmsd_fixA_walker2\(\[expr \$\{cycle\}-1\]\) < \$rmsd_fixA_walker2\]\) \&\& \(\[expr \$all_rmsd_fixB_walker1\(\[expr \$\{cycle\}-1\]\) > \$rmsd_fixB_walker1\]\)\)\} \{"
+    puts $tcl_file "if \{\(\(\[expr \(\[expr \$all_rmsd_fixA_walker2\(\[expr \$\{cycle\}-1\]\)+\$rmsd_percent\]\) < \$rmsd_fixA_walker2\]\) \&\& \(\[expr \(\[expr \$all_rmsd_fixB_walker1\(\[expr \$\{cycle\}-1\]\)+\$rmsd_percent\]\) > \$rmsd_fixB_walker1\]\)\)\} \{"
     puts $tcl_file "puts \"WALKER2 NEEDS TO BE REPEATED\""
     puts $tcl_file "set repetition \[expr \{\$repetition + 1\}\]"
     puts $tcl_file "set repetition_walker1 0"
@@ -1523,7 +1525,7 @@ proc ::comd::Prepare_system {} {
     puts $tcl_file "set repetition_flag 1"
     puts $tcl_file "\}"
 
-    puts $tcl_file "if \{\(\(\[expr \$all_rmsd_fixA_walker2\(\[expr \$\{cycle\}-1\]\) < \$rmsd_fixA_walker2\]\) \&\& \(\[expr \$all_rmsd_fixB_walker1\(\[expr \$\{cycle\}-1\]\) < \$rmsd_fixB_walker1\]\)\)\} \{"
+    puts $tcl_file "if \{\(\(\[expr \(\[expr \$all_rmsd_fixA_walker2\(\[expr \$\{cycle\}-1\]\)+\$rmsd_percent\]\) < \$rmsd_fixA_walker2\]\) \&\& \(\[expr \(\[expr \$all_rmsd_fixB_walker1\(\[expr \$\{cycle\}-1\]\)+\$rmsd_percent\)\] < \$rmsd_fixB_walker1\]\)\)\} \{"
     puts $tcl_file "puts \"WALKER1 AND WALKER2 NEEDS TO BE REPEATED\""
     puts $tcl_file "set repetition \[expr \{\$repetition + 1\}\]"
     puts $tcl_file "set repetition_walker1 1"
@@ -1533,15 +1535,6 @@ proc ::comd::Prepare_system {} {
 
     puts $tcl_file "if \{\(\[expr \$repetition_flag == 1\]\)\} \{"
     puts $tcl_file "set cycle \[expr \$\{cycle\}-1\]"
-    puts $tcl_file "continue"
-    puts $tcl_file "\}"
-
-    puts $tcl_file "if \{\(\$rmsd > \$all_rmsd\(\[expr 0\]\)\)\} \{"
-    puts $tcl_file "puts \"REPEATING CYCLE BECAUSE OF DIVERGENT CONFORMATIONS\""
-    puts $tcl_file "set cycle \[expr \$\{cycle\}-1\]"
-    puts $tcl_file "set repetition \[expr \{\$repetition + 1\}\]"
-    puts $tcl_file "set repetition_walker1 1"
-    puts $tcl_file "set repetition_walker2 1"
     puts $tcl_file "continue"
     puts $tcl_file "\}"
 
@@ -1563,7 +1556,7 @@ proc ::comd::Prepare_system {} {
     puts $tcl_file "continue"
     puts $tcl_file "}"
 
-    puts $tcl_file "if \{\(\(\$rmsd < 1.5)\&\&(\[expr \$all_rmsd\(\[expr \$\{cycle\}\-1\]\) - \$rmsd]\ < 0.15 \)\)\} \{ "
+    puts $tcl_file "if \{\( \(\$rmsd < 1.5\)\|\| \(\[expr abs\(\$all_rmsd\(\[expr \$\{cycle\}\-1\]\) - \$rmsd\)\] < 0.05 \)\)\} \{ "
     puts $tcl_file "puts \"FINISHED WITH CONVERGENT CONFORMATIONS\""
     puts $tcl_file "break" 
     puts $tcl_file "\}"
