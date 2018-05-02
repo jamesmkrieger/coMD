@@ -1760,6 +1760,13 @@ if { $argc < 3 } {
               set ::comd::gpus_selection1 $::comd::gpus_selected
               set ::comd::gpus_selection2 $::comd::gpus_selected
             }
+            if {$i > 0} {
+              set ::comd::gpus_selection1 [join $selection1 ","]
+              set ::comd::gpus_selection2 [join $selection2 ","]
+            } else {
+              set ::comd::gpus_selection1 $::comd::gpus_selected
+              set ::comd::gpus_selection2 $::comd::gpus_selected
+            }
           } else {
             set ::comd::gpus_selection1 $::comd::gpus_selected
             set ::comd::gpus_selection2 $::comd::gpus_selected
